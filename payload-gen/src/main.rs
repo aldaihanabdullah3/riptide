@@ -122,9 +122,12 @@ fn main() {
     // Build the implant
     println!("[*] Building {} ({})...", package, protocol.to_uppercase());
 
-    // Find the project root: RIPTIDE_SRC env var, or the directory this binary was built in
+    // Find the project root: RIPTIDE_SRC env var, or compile-time default, or cwd
     let project_dir = std::env::var("RIPTIDE_SRC")
-        .unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
+        .or_else(|_| std::env::var("CARGO_MANIFEST_DIR"))
+        .unwrap_or_else(|_| {
+            option_env!("RIPTIDE_SRC").unwrap_or("/opt/riptide/src").to_string()
+        });
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&project_dir);

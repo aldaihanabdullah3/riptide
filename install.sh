@@ -101,6 +101,7 @@ else
     cd "$SCRIPT_DIR"
 
     echo "[*] Building Riptide (release)..."
+    export RIPTIDE_SRC="$INSTALL_DIR/src"
     cargo build --release 2>&1 | tail -3
 
     sudo mkdir -p "$INSTALL_DIR"
@@ -132,9 +133,10 @@ else
     sudo ln -sf "$INSTALL_DIR/riptide-payload" /usr/local/bin/riptide-payload 2>/dev/null || true
     sudo ln -sf "$INSTALL_DIR/c2client.py" /usr/local/bin/riptide-client 2>/dev/null || true
 
-    # Set RIPTIDE_SRC so payload-gen knows where the source lives
-    if ! grep -q RIPTIDE_SRC /etc/environment 2>/dev/null; then
-        echo "RIPTIDE_SRC=$SRC_DIR" | sudo tee -a /etc/environment > /dev/null
+    # Set RIPTIDE_SRC for all shells
+    if [ ! -f /etc/profile.d/riptide.sh ]; then
+        echo "export RIPTIDE_SRC=$SRC_DIR" | sudo tee /etc/profile.d/riptide.sh > /dev/null
+        sudo chmod 644 /etc/profile.d/riptide.sh
     fi
 
     # Clean up build artifacts
