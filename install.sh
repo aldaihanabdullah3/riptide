@@ -76,11 +76,12 @@ else
     . "$CARGO_ENV"
 fi
 
-# Persist cargo in PATH for all shells (system-wide)
-CARGO_PROFILE="/etc/profile.d/cargo.sh"
-if [ ! -f "$CARGO_PROFILE" ]; then
-    echo '[ -d "$HOME/.cargo/bin" ] && export PATH="$HOME/.cargo/bin:$PATH"' | sudo tee "$CARGO_PROFILE" > /dev/null
-fi
+# Put cargo/rustc on system PATH (works for non-login shells too)
+for BIN in cargo rustc rustup; do
+    if [ -x "$HOME/.cargo/bin/$BIN" ] && [ ! -L "/usr/local/bin/$BIN" ]; then
+        sudo ln -sf "$HOME/.cargo/bin/$BIN" "/usr/local/bin/$BIN"
+    fi
+done
 
 # ── Add musl target ───────────────────────────────────────────────
 
@@ -111,12 +112,30 @@ else
     sudo cp target/release/payload-gen "$INSTALL_DIR/riptide-payload" 2>/dev/null || true
     sudo cp "$SCRIPT_DIR/c2client.py" "$INSTALL_DIR/" 2>/dev/null || true
 
+    # Copy source tree so payload-gen can build implants
+    SRC_DIR="$INSTALL_DIR/src"
+    echo "[*] Copying source to $SRC_DIR..."
+    sudo rm -rf "$SRC_DIR"
+    sudo mkdir -p "$SRC_DIR"
+    for member in c2-server console payload-gen implant; do
+        if [ -d "$SCRIPT_DIR/$member" ]; then
+            sudo cp -r "$SCRIPT_DIR/$member" "$SRC_DIR/"
+        fi
+    done
+    sudo cp "$SCRIPT_DIR/Cargo.toml" "$SCRIPT_DIR/Cargo.lock" "$SRC_DIR/" 2>/dev/null || true
+    sudo cp "$SCRIPT_DIR/rust-toolchain.toml" "$SRC_DIR/" 2>/dev/null || true
+
     # Symlink into PATH
     echo "[*] Linking into /usr/local/bin..."
     sudo ln -sf "$INSTALL_DIR/riptide-server" /usr/local/bin/riptide-server
     sudo ln -sf "$INSTALL_DIR/riptide-console" /usr/local/bin/riptide-console 2>/dev/null || true
     sudo ln -sf "$INSTALL_DIR/riptide-payload" /usr/local/bin/riptide-payload 2>/dev/null || true
     sudo ln -sf "$INSTALL_DIR/c2client.py" /usr/local/bin/riptide-client 2>/dev/null || true
+
+    # Set RIPTIDE_SRC so payload-gen knows where the source lives
+    if ! grep -q RIPTIDE_SRC /etc/environment 2>/dev/null; then
+        echo "RIPTIDE_SRC=$SRC_DIR" | sudo tee -a /etc/environment > /dev/null
+    fi
 
     # Clean up build artifacts
     echo "[*] Cleaning build cache..."

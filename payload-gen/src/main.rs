@@ -122,7 +122,12 @@ fn main() {
     // Build the implant
     println!("[*] Building {} ({})...", package, protocol.to_uppercase());
 
+    // Find the project root: RIPTIDE_SRC env var, or the directory this binary was built in
+    let project_dir = std::env::var("RIPTIDE_SRC")
+        .unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
+
     let mut cmd = Command::new("cargo");
+    cmd.current_dir(&project_dir);
     cmd.arg("build");
 
     if cli.release {
@@ -160,7 +165,7 @@ fn main() {
 
     // Locate and copy the built binary
     let target_dir = if cli.release { "release" } else { "debug" };
-    let src = format!("target/{}/{}/{}", cli.target, target_dir, package);
+    let src = format!("{}/target/{}/{}/{}", project_dir, cli.target, target_dir, package);
 
     if let Err(e) = std::fs::copy(&src, &cli.output) {
         eprintln!("[!] Failed to copy binary from {}: {}", src, e);
