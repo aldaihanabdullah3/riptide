@@ -1,0 +1,19 @@
+[package]
+name = "c2-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7", default-features = false, features = ["tokio", "http1", "json", "query", "ws"] }
+tokio = { version = "1", features = ["full"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+rustls-pemfile = "2"
+rcgen = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+futures = "0.3"
+hex = "0.4"
