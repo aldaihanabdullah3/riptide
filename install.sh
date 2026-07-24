@@ -159,7 +159,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/riptide/riptide-server --api-port 10337
+ExecStart=/opt/riptide/riptide-server --api-port 10337 --cert-dir /opt/riptide
 Restart=always
 RestartSec=5
 StandardOutput=journal

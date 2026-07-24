@@ -221,22 +221,48 @@ pub async fn start_listener(
         (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid port"})))
     })?;
 
-    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("bind failed: {}", e)})))
-    })?;
+    let is_https = protocol == "https";
+
+    // For HTTP: pre-bind the socket. For HTTPS: axum_server does it.
+    let listener = if !is_https {
+        let l = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("bind failed: {}", e)})))
+        })?;
+        Some(l)
+    } else {
+        None
+    };
 
     let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel::<()>();
 
     let implant_router = crate::routes::build_implant_router(state.clone());
+    let cert_path = state.cert_path.clone();
+    let key_path = state.key_path.clone();
 
     // Spawn the listener
+    let all_log = state.all_log.clone();
     tokio::spawn(async move {
-        let app = implant_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
-        let server = axum::serve(listener, app);
-
-        tokio::select! {
-            _ = server => {},
-            _ = &mut abort_rx => {},
+        if is_https {
+            match axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path).await {
+                Ok(tls_cfg) => {
+                    crate::util::log_line(&all_log, &format!("HTTPS_LISTENER binding to :{}", port));
+                    let app = implant_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+                    axum_server::bind_rustls(addr, tls_cfg).serve(app).await
+                        .unwrap_or_else(|e| crate::util::log_line(&all_log, &format!("HTTPS_LISTENER error: {}", e)));
+                }
+                Err(e) => {
+                    crate::util::log_line(&all_log, &format!("HTTPS_LISTENER TLS config error: {} (cert={:?} key={:?})",
+                        e, cert_path, key_path));
+                }
+            }
+        } else {
+            let listener = listener.unwrap();
+            let app = implant_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+            let server = axum::serve(listener, app);
+            tokio::select! {
+                _ = server => {},
+                _ = &mut abort_rx => {},
+            }
         }
     });
 

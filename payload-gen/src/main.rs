@@ -22,8 +22,8 @@ struct Cli {
     #[arg(long, default_value = "https")]
     protocol: String,
 
-    /// C2 server hostname or IP
-    #[arg(long, default_value = "10.170.22.213")]
+    /// C2 server hostname or IP (required)
+    #[arg(long)]
     host: String,
 
     /// C2 server port (default: 80 for http, 443 for https)
