@@ -100,9 +100,10 @@ else
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     cd "$SCRIPT_DIR"
 
-    echo "[*] Building Riptide (release)..."
+    echo "[*] Building Riptide server components (release)..."
     export RIPTIDE_SRC="$INSTALL_DIR/src"
-    cargo build --release 2>&1 | tail -3
+    # Only build server-side crates — implant is built separately by riptide-payload
+    cargo build --release -p c2-server -p console -p payload-gen 2>&1 | tail -5
 
     sudo mkdir -p "$INSTALL_DIR"
 

