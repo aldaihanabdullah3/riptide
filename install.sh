@@ -62,12 +62,24 @@ sudo apt-get install -y -qq build-essential pkg-config libssl-dev musl-tools cur
 
 # ── Install Rust ──────────────────────────────────────────────────
 
+# Ensure ~/.cargo/bin is in PATH for this script and persist it
+CARGO_ENV="$HOME/.cargo/env"
+if [ -f "$CARGO_ENV" ]; then
+    . "$CARGO_ENV"
+fi
+
 if command -v rustc &>/dev/null; then
     echo -e "${GREEN}[+] Rust: $(rustc --version)${NC}"
 else
     echo "[*] Installing Rust toolchain..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    . "$HOME/.cargo/env"
+    . "$CARGO_ENV"
+fi
+
+# Persist cargo in PATH for all shells (system-wide)
+CARGO_PROFILE="/etc/profile.d/cargo.sh"
+if [ ! -f "$CARGO_PROFILE" ]; then
+    echo '[ -d "$HOME/.cargo/bin" ] && export PATH="$HOME/.cargo/bin:$PATH"' | sudo tee "$CARGO_PROFILE" > /dev/null
 fi
 
 # ── Add musl target ───────────────────────────────────────────────
@@ -105,6 +117,10 @@ else
     sudo ln -sf "$INSTALL_DIR/riptide-console" /usr/local/bin/riptide-console 2>/dev/null || true
     sudo ln -sf "$INSTALL_DIR/riptide-payload" /usr/local/bin/riptide-payload 2>/dev/null || true
     sudo ln -sf "$INSTALL_DIR/c2client.py" /usr/local/bin/riptide-client 2>/dev/null || true
+
+    # Clean up build artifacts
+    echo "[*] Cleaning build cache..."
+    rm -rf "$SCRIPT_DIR/target"
 fi
 
 # ── Install systemd service ───────────────────────────────────────
