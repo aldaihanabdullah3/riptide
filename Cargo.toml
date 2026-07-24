@@ -1,5 +1,5 @@
 [workspace]
-members = ["c2-server", "console", "payload-gen", "implant", "implant-tier1", "implant-tier2", "implant-tier3"]
+members = ["c2-server", "console", "payload-gen", "implant"]
 resolver = "2"
 
 [workspace.package]
