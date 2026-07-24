@@ -10,7 +10,6 @@ use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::models::C2Event;
 use crate::state::AppState;
 
 /// GET /ws/events — WebSocket upgrade for real-time C2 event stream.

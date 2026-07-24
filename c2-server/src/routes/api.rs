@@ -1,6 +1,5 @@
 /// REST API endpoints for operator control.
 use axum::{
-    body::Bytes,
     extract::{Path, State},
     http::StatusCode,
     Json,
@@ -140,6 +139,7 @@ pub async fn list_files(
 }
 
 /// GET /api/v1/sessions/:id/files/:name — download a loot file.
+#[allow(dead_code)]
 pub async fn download_file(
     State(state): State<Arc<AppState>>,
     Path((_id, name)): Path<(String, String)>,
@@ -155,6 +155,7 @@ pub async fn download_file(
 // ── Config ───────────────────────────────────────────────────────────
 
 /// POST /api/v1/sessions/:id/config — update implant config (e.g., beacon interval).
+#[allow(dead_code)]
 pub async fn update_config(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -271,7 +272,6 @@ pub async fn start_listener(
     {
         let mut listeners = state.listeners.write().await;
         listeners.insert(port, crate::state::ListenerHandle {
-            port,
             protocol,
             abort: abort_tx,
         });

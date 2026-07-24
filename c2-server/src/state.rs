@@ -2,7 +2,6 @@
 use crate::models::*;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 const MAX_COMMANDS_PER_BEACON: usize = 10;
@@ -10,7 +9,6 @@ const MAX_COMMAND_HISTORY: usize = 500;
 
 /// Handle to a running beacon listener so we can stop it later.
 pub struct ListenerHandle {
-    pub port: u16,
     pub protocol: String,
     pub abort: tokio::sync::oneshot::Sender<()>,
 }

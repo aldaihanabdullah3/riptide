@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct BeaconQuery {
     pub id: Option<String>,
     pub ts: Option<String>,
+    #[allow(dead_code)]
     pub event: Option<String>,
 }
 
@@ -193,6 +194,7 @@ pub struct BeaconPayload {
     // Legacy fields from old implants
     #[serde(rename = "host")]
     pub host_legacy: Option<String>,
+    #[allow(dead_code)]
     pub event: Option<String>,
 }
 
@@ -293,6 +295,7 @@ pub enum C2Event {
         command_id: String,
         status: String,
     },
+    #[allow(dead_code)]
     SessionOffline {
         implant_id: String,
     },

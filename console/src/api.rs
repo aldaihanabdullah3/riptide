@@ -27,6 +27,7 @@ pub struct SessionListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CommandRecord {
     pub id: String,
     pub module: String,

