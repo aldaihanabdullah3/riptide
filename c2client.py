@@ -32,7 +32,7 @@ from typing import Optional, Any
 class C2Client:
     """Client for the C2 REST API."""
 
-    def __init__(self, base_url: str = "http://localhost:80", timeout: int = 10):
+    def __init__(self, base_url: str = "http://localhost:10337", timeout: int = 10):
         self.base = base_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()

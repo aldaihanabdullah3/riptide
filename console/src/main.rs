@@ -23,7 +23,7 @@ mod ui;
 #[command(name = "console", about = "C2 Operator Console")]
 struct Cli {
     /// C2 server URL
-    #[arg(long, default_value = "http://127.0.0.1:8080")]
+    #[arg(long, default_value = "http://127.0.0.1:10337")]
     server: String,
 
     /// Skip TLS certificate verification
