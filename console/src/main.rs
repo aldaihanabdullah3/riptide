@@ -4,6 +4,11 @@
 ///   riptide-console                                    # connects to localhost:10337
 ///   riptide-console --server http://10.0.0.1:10337     # custom server
 ///   riptide-console --server https://c2:10337 --no-tls-verify
+///   riptide-console --plain                            # PTY/agent-friendly: no line editor
+///
+/// `--plain` is for non-interactive drivers (the RAS TUA agent over an `incus exec -t`
+/// pexpect PTY): it reads lines from stdin with no rustyline raw-mode redraws and flushes
+/// stdout after each prompt so a `read_output` consumer sees the prompt and results.
 use clap::Parser;
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
@@ -18,6 +23,10 @@ struct Cli {
 
     #[arg(long)]
     no_tls_verify: bool,
+
+    /// PTY/agent-friendly mode: plain stdin/stdout, no rustyline line editor.
+    #[arg(long, default_value_t = false)]
+    plain: bool,
 }
 
 #[tokio::main]
@@ -32,11 +41,17 @@ async fn main() -> RlResult<()> {
     }
 
     println!("Type 'help' for commands, 'quit' to exit.\n");
-
-    let mut rl = DefaultEditor::new()?;
-    let _ = rl.load_history("/tmp/.riptide_history");
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
 
     let mut selected_id: Option<String> = None;
+
+    // rustyline editor only for the human (interactive) mode; --plain reads stdin directly
+    // so there are no raw-mode escape sequences for a PTY consumer to parse.
+    let mut rl = if cli.plain { None } else { Some(DefaultEditor::new()?) };
+    if let Some(ref mut rl) = rl {
+        let _ = rl.load_history("/tmp/.riptide_history");
+    }
 
     loop {
         let prompt = if let Some(ref id) = selected_id {
@@ -45,15 +60,16 @@ async fn main() -> RlResult<()> {
             "riptide> ".into()
         };
 
-        let line = match rl.readline(&prompt) {
-            Ok(l) => l,
-            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
-            Err(e) => { eprintln!("Error: {}", e); break; }
+        let line = match read_line(&mut rl, &prompt, cli.plain) {
+            Some(l) => l,
+            None => break, // EOF
         };
 
         let line = line.trim().to_string();
         if line.is_empty() { continue; }
-        let _ = rl.add_history_entry(&line);
+        if let Some(ref mut rl) = rl {
+            let _ = rl.add_history_entry(&line);
+        }
 
         let parts: Vec<&str> = line.splitn(2, ' ').collect();
         let cmd = parts[0];
@@ -149,11 +165,42 @@ async fn main() -> RlResult<()> {
 
             _ => println!("  Unknown command: {}. Type 'help'.", cmd),
         }
+
+        // In plain mode, flush so a PTY consumer (the agent's read_output) sees every line
+        // as it is printed rather than when a buffer fills.
+        if cli.plain {
+            let _ = std::io::stdout().flush();
+        }
     }
 
-    let _ = rl.save_history("/tmp/.riptide_history");
+    if let Some(ref mut rl) = rl {
+        let _ = rl.save_history("/tmp/.riptide_history");
+    }
     println!("bye.");
     Ok(())
+}
+
+/// Read one input line. rustyline in interactive mode; plain stdin in `--plain` mode.
+/// Returns `None` on EOF / Ctrl-D (and Ctrl-C in plain mode, which mirrors readline's Eof).
+fn read_line(rl: &mut Option<DefaultEditor>, prompt: &str, plain: bool) -> Option<String> {
+    if plain {
+        use std::io::Write as _;
+        print!("{}", prompt);
+        let _ = std::io::stdout().flush();
+        let mut buf = String::new();
+        match std::io::stdin().read_line(&mut buf) {
+            Ok(0) => None,                 // EOF
+            Ok(_) => Some(buf),            // includes the trailing newline
+            Err(_) => None,
+        }
+    } else {
+        let rl = rl.as_mut().unwrap();
+        match rl.readline(prompt) {
+            Ok(l) => Some(l),
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => None,
+            Err(_) => None,
+        }
+    }
 }
 
 async fn handle_session_cmd(client: &api::C2Client, id: &str, cmd: &str, arg: &str) {
